@@ -1,0 +1,19 @@
+name: task-list
+version: "0.1.0"
+description: >
+  Owner-gated task list: a durable backlog of items you add over time, where
+  nothing runs until you explicitly trigger it (tick the box / `hermes
+  tasklist run <id>`). Distinct from Kanban (which auto-dispatches and
+  auto-decomposes) — this is a manual queue for "do this later, when I say
+  go." Triggering an item spawns a headless one-shot Hermes agent
+  (`hermes -z <prompt> --yolo`) as a detached background process; the CLI
+  owns polling/completion via `hermes tasklist sync`. Backend owns a SQLite
+  table and exposes `hermes tasklist ...` CLI commands; a paired desktop
+  pane (~/.hermes/desktop-plugins/task-list/) drives it via cli.exec,
+  mirroring the decision-hud plugin's architecture.
+author: "Ian Koratsky"
+kind: standalone
+platforms:
+  - linux
+  - macos
+  - windows
