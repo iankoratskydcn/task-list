@@ -30,6 +30,7 @@ Schema (v1):
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 import uuid
@@ -40,7 +41,8 @@ try:
     from hermes_constants import get_hermes_home
 except ImportError:  # pragma: no cover - only when hermes core isn't importable (dev shell)
     def get_hermes_home() -> Path:
-        return Path.home() / ".hermes"
+        configured = os.environ.get("HERMES_HOME", "").strip()
+        return Path(configured) if configured else Path.home() / ".hermes"
 
 _STATUSES = ("pending", "queued", "running", "done", "failed")
 
