@@ -35,6 +35,13 @@ def setup(p) -> None:
     v.add_argument("--json", action="store_true")
     v.set_defaults(func=_cmd_add)
 
+    v = verbs.add_parser("edit", help="Edit a still-pending item's title/body")
+    v.add_argument("id")
+    v.add_argument("--title", default=None, help="New title (omit to leave unchanged)")
+    v.add_argument("--body", default=None, help="New goal/context text (omit to leave unchanged)")
+    v.add_argument("--json", action="store_true")
+    v.set_defaults(func=_cmd_edit)
+
     v = verbs.add_parser("list", help="List items (pending/queued/running/failed by default)")
     v.add_argument("--all", action="store_true", dest="include_archived", help="Include archived (done) items")
     v.add_argument("--json", action="store_true")
@@ -76,6 +83,20 @@ def _cmd_add(args) -> None:
         _print(task)
     else:
         print(f"Added {task['id']}: {task['title']}")
+
+
+def _cmd_edit(args) -> None:
+    task = db.edit_task(args.id, title=args.title, body=args.body)
+    if task is None:
+        if args.json:
+            _print({"error": "not found, or not editable (only 'pending' items can be edited)"})
+        else:
+            print("Not found, or not editable (only 'pending' items can be edited).")
+        raise SystemExit(1)
+    if args.json:
+        _print(task)
+    else:
+        print(f"Edited {task['id']}: {task['title']}")
 
 
 def _cmd_list(args) -> None:

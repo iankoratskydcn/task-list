@@ -152,6 +152,31 @@ def mark_queued(task_id: str) -> None:
         conn.commit()
 
 
+def edit_task(task_id: str, *, title: Optional[str] = None, body: Optional[str] = None) -> Optional[dict]:
+    """Update title/body of a still-pending item. Refuses (returns None) once an
+    item has been triggered — queued/running/done/failed rows already carry a
+    body that fed (or is feeding) a real spawned agent; editing history after
+    the fact would be misleading. Delete + re-add is the correct path for those.
+    """
+    task = get_task(task_id)
+    if task is None or task["status"] != "pending":
+        return None
+    sets, params = [], []
+    if title is not None and title.strip():
+        sets.append("title = ?")
+        params.append(title.strip())
+    if body is not None:
+        sets.append("body = ?")
+        params.append(body.strip())
+    if not sets:
+        return task
+    params.append(task_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", params)
+        conn.commit()
+    return get_task(task_id)
+
+
 def mark_finished(task_id: str, *, status: str, result: str = None, error: str = None) -> None:
     """status must be 'done' or 'failed'. A successful ('done') run auto-archives — the
     pending list only ever shows work not yet done. A failed run stays VISIBLE (not
