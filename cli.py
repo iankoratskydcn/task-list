@@ -32,6 +32,8 @@ def setup(p) -> None:
     v = verbs.add_parser("add", help="Add a pending item (never runs it)")
     v.add_argument("title")
     v.add_argument("--body", default="", help="Goal/context text handed to the agent when triggered")
+    v.add_argument("--agent", default="", help="Hermes profile/bot to run")
+    v.add_argument("--model", default="", help="Model override for this task")
     v.add_argument("--json", action="store_true")
     v.set_defaults(func=_cmd_add)
 
@@ -78,7 +80,7 @@ def setup(p) -> None:
 
 
 def _cmd_add(args) -> None:
-    task = db.add_task(args.title, args.body)
+    task = db.add_task(args.title, args.body, agent=args.agent, model=args.model)
     if args.json:
         _print(task)
     else:

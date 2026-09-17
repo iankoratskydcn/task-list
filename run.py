@@ -1,6 +1,6 @@
 """Task List — spawn/sync a triggered item as a detached one-shot Hermes agent.
 
-Trigger: `hermes -z <body> --yolo` as a DETACHED background process (start_new_session
+Trigger: `hermes -p <agent> -m <model> -z <body> --yolo` as a DETACHED background process (start_new_session
 so it survives the CLI invocation that triggered it exiting), stdout/stderr redirected
 to a per-task log file under plugin-data/task-list/logs/<id>.log. `run()` marks the row
 'running' with the child pid and returns immediately — it does not block.
@@ -72,7 +72,12 @@ def trigger(task_id: str) -> dict:
     db.mark_queued(task_id)
     log_path = _log_path(task_id)
     log_fh = open(log_path, "w", encoding="utf-8")
-    argv = [_hermes_executable(), "-z", task["body"], "--yolo"]
+    argv = [_hermes_executable()]
+    if task.get("agent"):
+        argv.extend(["-p", task["agent"]])
+    if task.get("model"):
+        argv.extend(["-m", task["model"]])
+    argv.extend(["-z", task["body"], "--yolo"])
     kwargs = dict(stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, close_fds=True)
     if os.name == "posix":
         kwargs["start_new_session"] = True  # detach from this CLI invocation's process group

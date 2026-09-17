@@ -20,7 +20,7 @@
  * loose plugin.js loaded via blob URL.
  */
 
-import { cn, host, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { cn, host, PALETTE_AREA, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import * as React from 'react'
 
@@ -78,6 +78,54 @@ function parseTrailingJson(output) {
     }
   }
   return null
+}
+
+function useTaskOptions() {
+  const [options, setOptions] = React.useState({ agents: [], models: [] })
+  React.useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      host.request('profiles.list', { include_sessions: false }),
+      host.request('model.options', { explicit_only: true }),
+    ]).then(([profiles, modelOptions]) => {
+      if (cancelled) return
+      const agents = (profiles?.profiles || []).map((p) => ({
+        value: p.name, label: p.display_name || p.name,
+      }))
+      const models = (modelOptions?.providers || []).flatMap((provider) =>
+        (provider.models || []).map((model) => ({
+          value: model,
+          label: `${model} (${provider.name || provider.slug})`,
+        })))
+      setOptions({ agents, models })
+    }).catch(() => {
+      // The form remains usable when an older/remote gateway lacks picker RPCs.
+    })
+    return () => { cancelled = true }
+  }, [])
+  return options
+}
+
+function OptionSelect({ label, value, onChange, options, placeholder }) {
+  return jsxs('div', {
+    className: 'flex min-w-0 flex-1 flex-col gap-1 text-[0.7rem] text-(--ui-text-tertiary)',
+    children: [
+      jsx('span', { children: label }),
+      jsxs(Select, {
+        value: value || '__default__',
+        onValueChange: (v) => onChange(v === '__default__' ? '' : v),
+        children: [
+          jsx(SelectTrigger, { className: 'h-7 w-full text-xs', children: jsx(SelectValue, {}) }),
+          jsxs(SelectContent, {
+            children: [
+              jsx(SelectItem, { value: '__default__', children: placeholder }),
+              options.map((option) => jsx(SelectItem, { key: option.value, value: option.value, children: option.label })),
+            ],
+          }),
+        ],
+      }),
+    ],
+  })
 }
 
 function useTaskList() {
@@ -362,7 +410,12 @@ function TaskRow({ task, onOpen, onRun, onDelete, busy }) {
           }),
           jsxs('div', {
             className: 'text-[0.7rem] text-(--ui-text-tertiary)',
-            children: [STATUS_LABEL[task.status] || task.status, task.error ? ` — ${task.error}` : ''],
+            children: [
+              STATUS_LABEL[task.status] || task.status,
+              task.agent ? ` · ${task.agent}` : '',
+              task.model ? ` · ${task.model}` : '',
+              task.error ? ` — ${task.error}` : '',
+            ],
           }),
         ],
       }),
@@ -377,34 +430,98 @@ function TaskRow({ task, onOpen, onRun, onDelete, busy }) {
   })
 }
 
-function AddTaskForm({ onAdd, busy }) {
+function SparkleButton({ onClick, busy, label }) {
+  return jsx('button', {
+    type: 'button',
+    onClick,
+    disabled: busy,
+    'aria-label': label,
+    title: label,
+    className: 'shrink-0 rounded px-1 text-xs text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-secondary) disabled:opacity-50',
+    children: '✨',
+  })
+}
+
+// Rewrite via the gateway's stateless one-shot RPC (llm.oneshot), which runs
+// on the standard/aux model configured for title_generation-style tasks —
+// no session, no history, just instructions + the current text in, cleaned
+// text out. Same RPC the app itself uses for auto-titling conversations.
+async function rewriteText(instructions, input) {
+  const res = await host.request('llm.oneshot', { instructions, input, task: 'title_generation', max_tokens: 512 })
+  const text = (res && res.text) || ''
+  return text.trim()
+}
+
+function AddTaskForm({ onAdd, busy, options }) {
   const [title, setTitle] = React.useState('')
   const [body, setBody] = React.useState('')
+  const [agent, setAgent] = React.useState('')
+  const [model, setModel] = React.useState('')
+  const [rewriting, setRewriting] = React.useState(null) // 'title' | 'body' | null
   const submit = React.useCallback(() => {
     const t = title.trim()
     if (!t || busy) return
-    onAdd(t, body.trim())
+    onAdd(t, body.trim(), agent, model)
     setTitle('')
     setBody('')
-  }, [title, body, busy, onAdd])
+  }, [title, body, agent, model, busy, onAdd])
+
+  const handleRewrite = async (field) => {
+    const current = field === 'title' ? title : body
+    if (!current.trim() || rewriting) return
+    setRewriting(field)
+    try {
+      const instructions = field === 'title'
+        ? 'Rewrite this task-list title to be clear and concise (max ~8 words). Return only the rewritten title, no quotes/preamble.'
+        : 'Rewrite this task goal/context so a headless agent with no other context can act on it: concrete, self-contained, imperative. Return only the rewritten text, no preamble.'
+      const result = await rewriteText(instructions, current)
+      if (result) (field === 'title' ? setTitle : setBody)(result)
+    } catch (e) {
+      host.notify({ kind: 'error', message: String(e.message || e) })
+    } finally {
+      setRewriting(null)
+    }
+  }
+
   return jsxs('div', {
     className: 'flex flex-col gap-1.5 rounded border border-(--ui-stroke-secondary) p-2',
     children: [
-      jsx('input', {
-        type: 'text', placeholder: 'Task title', value: title,
-        onChange: (e) => setTitle(e.target.value),
-        onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) submit() },
-        className: 'w-full rounded border border-(--ui-stroke-secondary) bg-transparent px-2 py-1 text-sm',
+      jsxs('div', {
+        className: 'flex items-center gap-1',
+        children: [
+          jsx('input', {
+            type: 'text', placeholder: 'Task title', value: title,
+            onChange: (e) => setTitle(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) submit() },
+            className: 'w-full min-w-0 flex-1 rounded border border-(--ui-stroke-secondary) bg-transparent px-2 py-1 text-sm',
+          }),
+          jsx(SparkleButton, { onClick: () => handleRewrite('title'), busy: rewriting === 'title', label: 'Rewrite title with AI' }),
+        ],
       }),
-      jsx('textarea', {
-        placeholder: 'Goal/context for the agent when triggered (optional — defaults to the title)',
-        value: body, onChange: (e) => setBody(e.target.value), rows: 2,
-        className: 'w-full resize-none rounded border border-(--ui-stroke-secondary) bg-transparent px-2 py-1 text-xs',
+      jsxs('div', {
+        className: 'flex items-start gap-1',
+        children: [
+          jsx('textarea', {
+            placeholder: 'Goal/context for the agent when triggered (optional — defaults to the title)',
+            value: body, onChange: (e) => setBody(e.target.value), rows: 2,
+            className: 'w-full min-w-0 flex-1 resize-none rounded border border-(--ui-stroke-secondary) bg-transparent px-2 py-1 text-xs',
+          }),
+          jsx(SparkleButton, { onClick: () => handleRewrite('body'), busy: rewriting === 'body', label: 'Rewrite goal/context with AI' }),
+        ],
       }),
-      jsx('button', {
-        type: 'button', onClick: submit, disabled: busy || !title.trim(),
-        className: 'self-end rounded border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
-        children: 'Add',
+      jsxs('div', {
+        className: 'flex items-end gap-2',
+        children: [
+          jsx(OptionSelect, { label: 'Agent / bot', value: agent, onChange: setAgent,
+            options: options.agents, placeholder: 'Default agent' }),
+          jsx(OptionSelect, { label: 'Model', value: model, onChange: setModel,
+            options: options.models, placeholder: 'Default model' }),
+          jsx('button', {
+            type: 'button', onClick: submit, disabled: busy || !title.trim(),
+            className: 'h-7 shrink-0 rounded border border-(--ui-stroke-secondary) px-2 text-xs hover:bg-(--chrome-action-hover)',
+            children: 'Add',
+          }),
+        ],
       }),
     ],
   })
@@ -412,6 +529,7 @@ function AddTaskForm({ onAdd, busy }) {
 
 function TaskListPane() {
   const { tasks, loading, error, refresh } = useTaskList()
+  const options = useTaskOptions()
   const [busy, setBusy] = React.useState(false)
   const [openId, setOpenId] = React.useState(null)
 
@@ -422,10 +540,14 @@ function TaskListPane() {
     if (openId && !openTask) setOpenId(null)
   }, [openId, openTask])
 
-  const handleAdd = React.useCallback(async (title, body) => {
+  const handleAdd = React.useCallback(async (title, body, agent, model) => {
     setBusy(true)
     try {
-      await cliExec(['tasklist', 'add', title, '--body', body || title, '--json'])
+      const argv = ['tasklist', 'add', title, '--body', body || title]
+      if (agent) argv.push('--agent', agent)
+      if (model) argv.push('--model', model)
+      argv.push('--json')
+      await cliExec(argv)
       host.notify({ kind: 'success', message: `Added: ${title}` })
       await refresh()
     } catch (e) {
@@ -503,7 +625,7 @@ function TaskListPane() {
             ],
           }),
           error ? jsx('div', { className: 'text-[0.75rem] text-(--ui-danger,#e5484d)', children: error }) : null,
-          jsx(AddTaskForm, { onAdd: handleAdd, busy }),
+          jsx(AddTaskForm, { onAdd: handleAdd, busy, options }),
           jsx('div', {
             className: 'flex flex-col gap-1.5',
             children: tasks.length === 0
@@ -527,6 +649,31 @@ function TaskListPane() {
   })
 }
 
+
+
+// Pane placement: shared with decision-hud's Layout tab (PanePlacementControls
+// there is the only writer). Same localStorage key, read independently here
+// since this is a separate blob-loaded plugin.js with no shared JS module
+// scope with decision-hud's file. 'right' = original docked column, 'session-tab'
+// = dock into the SESSIONS zone as a center tab (same shape as Kanban's Bots pane).
+const PANE_PLACEMENT_STORAGE_KEY = 'decision-hud:pane-placement'
+
+function loadTaskListPlacement() {
+  try {
+    const raw = localStorage.getItem(PANE_PLACEMENT_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && parsed.taskList === 'right' ? 'right' : 'session-tab'
+  } catch {
+    return 'session-tab'
+  }
+}
+
+function taskListPaneRegistrationData(placement) {
+  return placement === 'session-tab'
+    ? { placement: 'left', width: '260px', collapsible: true, hideOnly: true, dock: { pane: 'sessions', pos: 'center', enforce: true } }
+    : { placement: 'right', dock: { pane: 'workspace', pos: 'right' }, minWidth: '22rem' }
+}
+
 export default {
   id: PLUGIN_ID,
   name: 'Task List',
@@ -535,15 +682,16 @@ export default {
       id: PANE_ID,
       area: 'panes',
       title: 'Task List',
-      data: { placement: 'right', dock: { pane: 'workspace', pos: 'right' }, minWidth: '22rem' },
+      data: taskListPaneRegistrationData(loadTaskListPlacement()),
       render: () => jsx(TaskListPane, {}),
     })
-    // No SIDEBAR_NAV_AREA entry: decision-hud's own comments document that a nav row
-    // needs a matching ROUTES_AREA placeholder or clicking it just reveals whatever
-    // chat sits behind an empty route. The palette command below is the proven
-    // reveal-the-docked-pane path (host.revealPane targets a `panes` registration,
-    // which is what PANE_ID is) — add a ROUTES_AREA placeholder + nav row later if a
-    // sidebar entry point turns out to be worth the extra surface.
+    // No sidebar-nav row / route: 'session-tab' placement (the default now,
+    // see loadTaskListPlacement above) docks this pane straight into the
+    // SESSIONS zone tab strip — same mechanism the built-in Bots pane uses
+    // (no nav row, no route). A SidebarNavContribution only takes a `path`
+    // (no onClick), so any nav-row wiring always routes through ROUTES_AREA
+    // first — confirmed live to cause a visible flash/reload on every click,
+    // even with the reveal-and-redirect placeholder pattern. Removed.
     ctx.register({
       id: 'open',
       area: PALETTE_AREA,
